@@ -1,0 +1,1244 @@
+classdef FSCV_FIT_v6 < matlab.apps.AppBase
+
+    % Properties that correspond to app components
+    properties (Access = public)
+        FSCVAnalysisUIFigure           matlab.ui.Figure
+        SignalanalysisButton           matlab.ui.control.Button
+        SaveIvsTAverageButton          matlab.ui.control.Button
+        TextArea                       matlab.ui.control.TextArea
+        SetDefaultDirectoryButton      matlab.ui.control.Button
+        ClearFitandParametersButton    matlab.ui.control.Button
+        FitdatabetweenLabel            matlab.ui.control.Label
+        ParameterTable                 matlab.ui.control.Table
+        CursorFitEnd                   matlab.ui.control.NumericEditField
+        EndtimesEditFieldLabel         matlab.ui.control.Label
+        CursorFitStart                 matlab.ui.control.NumericEditField
+        StarttimesEditFieldLabel       matlab.ui.control.Label
+        FittoRestrictedDiffusionModelButton  matlab.ui.control.Button
+        ClearAllDataButton             matlab.ui.control.Button
+        SaveDataFitButton              matlab.ui.control.Button
+        SaveParametersButton           matlab.ui.control.Button
+        FitDatatoSimpleRiseandDecayButton  matlab.ui.control.Button
+        OpenandAverageIvsTFilesButton  matlab.ui.control.Button
+        RDModelParametersPanel         matlab.ui.container.Panel
+        kdesEditFieldLabel             matlab.ui.control.Label
+        kadsEditFieldLabel             matlab.ui.control.Label
+        ku2EditFieldLabel              matlab.ui.control.Label
+        kuEditFieldLabel               matlab.ui.control.Label
+        keEditFieldLabel               matlab.ui.control.Label
+        rEditFieldLabel                matlab.ui.control.Label
+        AcceptParametersButton         matlab.ui.control.Button
+        kdesEditField                  matlab.ui.control.NumericEditField
+        UpdatePreviewButton            matlab.ui.control.Button
+        kadsEditField                  matlab.ui.control.NumericEditField
+        ku2EditField                   matlab.ui.control.NumericEditField
+        kuEditField                    matlab.ui.control.NumericEditField
+        keEditField                    matlab.ui.control.NumericEditField
+        rEditField                     matlab.ui.control.NumericEditField
+        ComponentAxes                  matlab.ui.control.UIAxes
+        DataPlot                       matlab.ui.control.UIAxes
+    end
+
+    
+    properties (Access = private)
+    uniqueTime;
+    averageCurrent;
+    fittedCurveHandle;
+    startLine;
+    endLine;
+    time_fit;
+    fitCurrent;
+    SimpleFitCurveHandle;
+    fitType;
+    previewAxes;
+    defaultDirectory; % Add the defaultDirectory property
+    AnalysisResultsTable; % Property to hold the analysis results table
+    SaveAnalysisTableButton % Property to hold the save analysis button
+   
+    % Initial parameters for curve fitting
+    initialR
+    initialKE
+    initialKU
+    initialKU2
+    initialKADS
+    initialKDES
+    end 
+    
+    properties (Access = public)
+         PreviewCurve = [ ]% Handle to the preview plot line
+    end
+
+    % Callbacks that handle component events
+    methods (Access = private)
+
+        % Button pushed function: OpenandAverageIvsTFilesButton
+        function OpenandAverageIvsTFilesButtonPushed(app, event)
+           
+            % Check if a default directory is set
+    if isprop(app, 'defaultDirectory') && ischar(app.defaultDirectory)
+        % Use the default directory as the starting directory for uigetfile
+        [fileNames, pathName] = uigetfile({'*.txt;*.csv', 'Text and CSV Files (*.txt, *.csv)'}, 'Select I vs. T files', app.defaultDirectory, 'MultiSelect', 'on');
+    else
+        % Use the default behavior of uigetfile
+        [fileNames, pathName] = uigetfile({'*.txt;*.csv', 'Text and CSV Files (*.txt, *.csv)'}, 'Select I vs. T files', 'MultiSelect', 'on');
+    end
+            
+        if isequal(fileNames, 0)
+            disp('User canceled file selection.');
+            return;
+        end
+        if ~iscell(fileNames)
+            fileNames = {fileNames};
+        end
+        allTime = {}; allCurrent = {};
+        for i = 1:length(fileNames)
+            fullFileName = fullfile(pathName, fileNames{i});
+            data = readmatrix(fullFileName);
+            allTime{i} = data(:, 1); allCurrent{i} = data(:, 2);
+        end
+        minLen = Inf; for i = 1:length(allTime), minLen = min(minLen, length(allTime{i})); end
+        uniqueTime = allTime{1}(1:minLen); averageCurrent = zeros(minLen, 1);
+        for i = 1:length(allTime), averageCurrent = averageCurrent + allCurrent{i}(1:minLen); end
+        averageCurrent = averageCurrent / length(allTime);
+        
+        % Estimate Baseline
+          %baseline = mean(averageCurrent(end-10:end)); % Average last 10 points
+
+         % Subtract Baseline
+          %averageCurrent = averageCurrent - baseline;
+
+        % Plot data
+        plot(app.DataPlot, uniqueTime, averageCurrent, 'o');
+        hold(app.DataPlot, 'on');
+       
+       
+      % Store data in appdata
+        app.uniqueTime = uniqueTime;
+        app.averageCurrent = averageCurrent;
+
+      % Add vertical lines for cursors (without ButtonDownFcn)
+        app.startLine = line(app.DataPlot, [app.uniqueTime(1), app.uniqueTime(1)], app.DataPlot.YLim, 'Color', 'r', 'LineWidth', 1.5, 'Tag', 'startLine');
+        app.endLine = line(app.DataPlot, [app.uniqueTime(end), app.uniqueTime(end)], app.DataPlot.YLim, 'Color', 'g', 'LineWidth', 1.5, 'Tag', 'endLine');
+   
+      % Update edit fields
+      app.CursorFitStart.Value = app.uniqueTime(1);
+      app.CursorFitEnd.Value = app.uniqueTime(end);
+      
+        end
+
+        % Value changed function: CursorFitStart
+        function CursorFitStartValueChanged(app, event)
+
+                 newX = app.CursorFitStart.Value;
+                 app.startLine.XData = [newX, newX];
+   
+ 
+        end
+
+        % Value changed function: CursorFitEnd
+        function CursorFitEndValueChanged(app, event)
+
+        newX = app.CursorFitEnd.Value;
+        app.endLine.XData = [newX, newX];
+        end
+
+        % Button pushed function: FitDatatoSimpleRiseandDecayButton
+        function FitDatatoSimpleRiseandDecayButtonPushed(app, event)
+            uniqueTime = app.uniqueTime;
+    averageCurrent = app.averageCurrent;
+    startTime = app.CursorFitStart.Value;
+    endTime = app.CursorFitEnd.Value;
+
+    % Extract data within the selected range
+    timeRange = uniqueTime >= startTime & uniqueTime <= endTime;
+    fitTime = uniqueTime(timeRange);
+    fitCurrent = averageCurrent(timeRange);
+
+    % Find the peak index
+    [peakValue, peakIndex] = max(fitCurrent);
+    peakTime = fitTime(peakIndex);
+
+     % Rising phase data
+    risingIndices = fitTime <= peakTime;
+    risingTime = fitTime(risingIndices);
+    risingCurrent = fitCurrent(risingIndices);
+    risingTimeShifted = risingTime - min(risingTime);
+
+    % Decay phase data
+    decayIndices = fitTime >= peakTime;
+    decayTime = fitTime(decayIndices);
+    decayCurrent = fitCurrent(decayIndices);
+    decayTimeShifted = decayTime - peakTime;
+
+    % Rising phase fit (simple exponential)
+    risingModelFun = @(params, t) params(1) * (1 - exp(-params(2) * t)) + params(3);
+    A_rising_initial = peakValue - min(risingCurrent);
+    k_rising_initial = 10;
+    C_rising_initial = min(risingCurrent);
+    risingParamsInitial = [A_rising_initial, k_rising_initial, C_rising_initial];
+    try
+        risingParams = lsqcurvefit(risingModelFun, risingParamsInitial, risingTimeShifted, risingCurrent);
+    catch ME
+        fprintf('Error fitting rising phase: %s\n', ME.message);
+        return;
+    end
+
+    % Decay phase fit (exponential decay)
+    decayModelFun = @(params, t) params(1) * exp(-params(2) * t) + params(3);
+    A_decay_initial = peakValue - mean(decayCurrent(end-min(10,length(decayCurrent)):end));
+    k_decay_initial = 0.5;
+    C_decay_initial = mean(decayCurrent(end-min(10,length(decayCurrent)):end));
+    decayParamsInitial = [A_decay_initial, k_decay_initial, C_decay_initial];
+    try
+        decayParams = lsqcurvefit(decayModelFun, decayParamsInitial, decayTimeShifted, decayCurrent);
+    catch ME
+        fprintf('Error fitting decay phase: %s\n', ME.message);
+        return;
+    end
+
+    % Calculate the fitted curve within the selected range
+    fittedCurveFitRange = zeros(size(fitTime));
+    for i = 1:length(fitTime)
+        if fitTime(i) <= peakTime
+            if ismember(fitTime(i), risingTime)
+                fittedCurveFitRange(i) = risingModelFun(risingParams, fitTime(i) - min(risingTime));
+            end
+        else
+            if ismember(fitTime(i), decayTime)
+                fittedCurveFitRange(i) = decayModelFun(decayParams, fitTime(i) - peakTime);
+            end
+        end
+    end
+
+    % Create the full fitted curve vector
+    fittedCurve = averageCurrent; % Initialize with original data
+    fittedCurve(timeRange) = fittedCurveFitRange; % Replace fit range with calculated values
+    
+    
+    % Store fitTime and fitCurrent as app properties
+    app.time_fit = fitTime;
+    app.fitCurrent = fittedCurveFitRange; % Assign the fitted curve data;
+    
+
+    % Plot the fitted curve on the same axes
+    if ~isempty(app.SimpleFitCurveHandle) && isvalid(app.SimpleFitCurveHandle)
+        delete(app.SimpleFitCurveHandle);
+    end
+    fittedCurveHandle = plot(app.DataPlot, fitTime, fittedCurveFitRange, 'r-', 'DisplayName', 'Fitted Curve');
+    app.SimpleFitCurveHandle = fittedCurveHandle;
+
+
+    % Store fitted curve handle in appdata
+    setappdata(app.FSCVAnalysisUIFigure, 'fittedCurveHandle', fittedCurveHandle);
+
+    % Store fit type
+    app.fitType = 'simple'; % Add a property to indicate fit type
+
+   % When saving data, only save fitTime and fittedCurveFitRange
+    app.time_fit = fitTime;
+    app.fitCurrent = fittedCurveFitRange;
+    
+    
+    % Calculate R-squared
+    fittedCurrentFit = zeros(size(fitCurrent));
+    for i = 1:length(fitCurrent)
+        if fitTime(i) <= peakTime
+            fittedCurrentFit(i) = risingModelFun(risingParams, fitTime(i) - min(risingTime));
+        else
+            fittedCurrentFit(i) = decayModelFun(decayParams, fitTime(i) - peakTime);
+        end
+    end
+    SSres = sum((fitCurrent - fittedCurrentFit).^2);
+    SStot = sum((fitCurrent - mean(fitCurrent)).^2);
+    Rsq = 1 - SSres/SStot;
+
+    % Display parameters in table
+    app.ParameterTable.Data = {
+        'Rising A', risingParams(1);
+        'Rising k', risingParams(2);
+        'Rising C', risingParams(3);
+        'Decay A', decayParams(1);
+        'Decay k', decayParams(2);
+        'Decay C', decayParams(3);
+        'R^2', Rsq
+    };
+        end
+
+        % Button pushed function: SaveParametersButton
+        function SaveParametersButtonPushed(app, event)
+        % Check if ParameterTable has data
+    
+          if isempty(app.ParameterTable.Data)
+          uialert(app.FSCVAnalysisUIFigure, 'No parameters to save. Please fit the data first.', 'Save Parameters', 'Icon', 'warning');
+          return;
+          end
+
+    % Get table data
+    paramData = app.ParameterTable.Data;
+
+    % Create formatted text
+    textData = '';
+    for i = 1:size(paramData, 1)
+        textData = [textData, paramData{i, 1}, ': ', num2str(paramData{i, 2}), '\n'];
+    end
+
+    % Save text to .txt file
+    
+    if isprop(app, 'defaultDirectory') && ischar(app.defaultDirectory)
+        [fileName, pathName] = uiputfile('*.txt', 'Save Parameters', app.defaultDirectory);
+    else
+    [fileName, pathName] = uiputfile('*.txt', 'Save Parameters');
+    end
+    if fileName ~= 0
+        fullFileName = fullfile(pathName, fileName);
+        fileID = fopen(fullFileName, 'w');
+        if fileID ~= -1
+            fprintf(fileID, textData);
+            fclose(fileID);
+            uialert(app.FSCVAnalysisUIFigure, 'Parameters saved successfully!', 'Save Parameters', 'Icon', 'success');
+        else
+            uialert(app.FSCVAnalysisUIFigure, 'Error: Could not open file for writing.', 'Save Parameters', 'Icon', 'error');
+        end
+    else
+        uialert(app.FSCVAnalysisUIFigure, 'Save operation canceled.', 'Save Parameters');
+    end
+        end
+
+        % Button pushed function: SaveDataFitButton
+        function SaveDataFitButtonPushed(app, event)
+       
+       % Check if data is ready
+
+        if length(app.time_fit) == 0 || length(app.fitCurrent) == 0 % Check length instead of isempty
+        uialert(app.FSCVAnalysisUIFigure, 'No data to save. Please fit the data first.', 'Save Data and Fit', 'Icon', 'warning');
+        return;
+    end
+
+    % Get data
+    time_fit = app.time_fit;
+    fitCurrent = app.fitCurrent;
+    
+    % Get the fitted curve data from appdata
+    fittedCurveHandle = getappdata(app.FSCVAnalysisUIFigure, 'fittedCurveHandle');
+    if isgraphics(fittedCurveHandle) && isvalid(fittedCurveHandle)
+        fittedCurve = fittedCurveHandle.YData;
+    else
+        uialert(app.FSCVAnalysisUIFigure, 'No fitted curve found. Please perform a fit first.', 'Save Data and Fit', 'Icon', 'warning');
+        return;
+    end
+
+    % Save data and fit to file
+    
+    if isprop(app, 'defaultDirectory') && ischar(app.defaultDirectory)
+        [file, path] = uiputfile('*.txt', 'Save Data and Fit', app.defaultDirectory);
+    else
+    [file, path] = uiputfile('*.txt', 'Save Data and Fit');
+    end
+    if file ~= 0
+        filename = fullfile(path, file);
+        fileID = fopen(filename, 'w');
+        if fileID ~= -1
+            fprintf(fileID, 'Time\tCurrent\tFitted Curve\n');
+            for i = 1:length(time_fit)
+                fprintf(fileID, '%f\t%f\t%f\n', time_fit(i), app.averageCurrent(app.uniqueTime == time_fit(i)), fittedCurve(i));
+            end
+            fclose(fileID);
+            uialert(app.FSCVAnalysisUIFigure, 'Data and fit saved successfully!', 'Save Data and Fit', 'Icon', 'success');
+        else
+            uialert(app.FSCVAnalysisUIFigure, 'Error: Could not open file for writing.', 'Save Data and Fit', 'Icon', 'error');
+        end
+    else
+        uialert(app.FSCVAnalysisUIFigure, 'Save operation canceled.', 'Save Data and Fit');
+    end
+        end
+
+        % Button pushed function: FittoRestrictedDiffusionModelButton
+        function FittoRestrictedDiffusionModelButtonPushed(app, event)
+    % Get data and cursor values
+    uniqueTime = app.uniqueTime;
+    averageCurrent = app.averageCurrent;
+    startTime = app.CursorFitStart.Value; % Use cursor start value
+    endTime = app.CursorFitEnd.Value; % Use cursor end value
+
+    % Extract data within the selected range
+    timeRange = uniqueTime >= startTime & uniqueTime <= endTime;
+    time_fit = uniqueTime(timeRange);
+    fitCurrent = averageCurrent(timeRange);
+
+    % Ensure time_fit is strictly increasing
+     [time_fit, sortIdx] = sort(time_fit);
+     fitCurrent = fitCurrent(sortIdx);
+    
+    % Store time_fit and fitCurrent as app properties
+        app.time_fit = time_fit;
+        app.fitCurrent = fitCurrent;
+
+        % Access initial parameters from app properties (if available)
+ 
+    if isprop(app, 'initialR') % Check if properties exist
+        r0 = app.initialR;
+        ke0 = app.initialKE;
+        ku0 = app.initialKU;
+        ku20 = app.initialKU2;
+        kads0 = app.initialKADS;
+        kdes0 = app.initialKDES;
+
+        % Use accepted parameters as initial guesses
+        paramsInitial = [ke0, ku0, r0, kads0, kdes0, ku20]; % Correct order
+        disp('Using accepted parameters as initial guesses.');
+
+        % Check the type of app.ParameterTable.Data
+        if iscell(app.ParameterTable.Data)
+            % Assign a cell array
+            app.ParameterTable.Data(:, 2) = {r0; ke0; r0/ke0;ku0; ku20; kads0; kdes0;NaN};
+        else
+            % Assign a numeric array
+            app.ParameterTable.Data(:, 2) = [r0; ke0; ku0; ku20; kads0; kdes0];
+        end
+    else
+        % Use default initial parameter guesses
+        paramsInitial = [20, 2.4, 600, 0.09, 0.01, 0.5]; % ke, ku1, r, kads, kdes, ku2 (added ku2)
+        disp('Using default initial guesses.');
+
+        % Check the type of app.ParameterTable.Data
+        if iscell(app.ParameterTable.Data)
+            % Assign a cell array
+            app.ParameterTable.Data(:, 2) = {NaN; NaN; NaN; NaN; NaN; NaN;NaN;NaN};
+        else
+            % Assign a numeric array
+            app.ParameterTable.Data(:, 2) = [NaN; NaN; NaN; NaN; NaN; NaN;NaN;NaN];
+        end
+    end
+
+    % Model function for lsqcurvefit
+    modelFun = @(params, t) getModelOutput(params, t);
+
+    % Nested function to get model output
+    function output = getModelOutput(params, t)
+        tempOutput = restrictedDiffusionModel(t, params);
+        output = tempOutput(:, 1);
+    end
+
+    % Restricted diffusion model function (NESTED FUNCTION)
+    function DA = restrictedDiffusionModel(t, params)
+        ke = params(1);
+        ku1 = params(2);
+        ku2 = params(6); % Added ku2
+        r = params(3);
+        kads = params(4);
+        kdes = params(5);
+        % Release/Uptake Component (Sum of Exponentials Decay)
+        odeFun_release_uptake = @(time, y) r * exp(-ke * time) - (ku1 * y(1) + ku2 * y(1)); % Sum of exponentials
+        y0_release_uptake = 0;
+        tspan = t - t(1);
+        options = odeset('RelTol', 1e-6, 'AbsTol', 1e-8);
+        [~, DA_release_uptake] = ode15s(odeFun_release_uptake, tspan, y0_release_uptake, options);
+        % Adsorbed DA
+        odeFun_ads = @(time, y) kads * interp1(tspan, DA_release_uptake, time) - kdes * y;
+        y0_ads = 0;
+        [~, DAads] = ode15s(odeFun_ads, tspan, y0_ads, options);
+        % Total DA
+        DA = DA_release_uptake + DAads;
+        % Return all three components
+        DA = [DA, DAads, DA_release_uptake];
+    end
+
+    % Parameter bounds
+    lb = [0, 0, 0, 0, 0, 0];
+    ub = [Inf, Inf, Inf, Inf, Inf, Inf];
+
+    % Use lsqcurvefit for parameter optimization
+    [paramsFitted, resnorm, ~, exitflag, output] = lsqcurvefit(modelFun, paramsInitial, time_fit, fitCurrent, lb, ub);
+
+    % Check lsqcurvefit exit flag
+    if exitflag <= 0
+        disp(['lsqcurvefit did not converge properly. Exit flag: ', num2str(exitflag)]);
+    end
+
+    % Extract fitted parameters
+    ke = paramsFitted(1);
+    ku1 = paramsFitted(2);
+    r = paramsFitted(3);
+    kads = paramsFitted(4);
+    kdes = paramsFitted(5);
+    ku2 = paramsFitted(6); % Added ku2
+
+    % Generate fitted curve
+    modelOutput = restrictedDiffusionModel(time_fit, paramsFitted);
+    data_fit = modelOutput(:, 1);
+
+    % Extract components
+    DAads = modelOutput(:, 2);
+    DA_release_uptake = modelOutput(:, 3);
+
+    % Refined Scaling Factor
+    [modelPeak, modelPeakIndex] = max(data_fit);
+    dataPeak = max(fitCurrent);
+    scalingFactor = dataPeak / modelPeak;
+    data_fit = data_fit * scalingFactor;
+    DAads = DAads * scalingFactor;
+    DA_release_uptake = DA_release_uptake * scalingFactor;
+
+    % Plot model output
+    plot(app.ComponentAxes, time_fit, DA_release_uptake, 'r-', 'DisplayName', 'Release/Uptake');
+    hold(app.ComponentAxes, 'on');
+    plot(app.ComponentAxes, time_fit, DAads, 'g-', 'DisplayName', 'Adsorbed DA');
+    plot(app.ComponentAxes, time_fit, data_fit, 'b-', 'DisplayName', 'Total DA');
+    xlabel(app.ComponentAxes, 'Time (s)');
+    ylabel(app.ComponentAxes, 'DA Components');
+    title(app.ComponentAxes, 'Restricted Diffusion Model Components');
+    grid(app.ComponentAxes, 'on');
+    legend(app.ComponentAxes, 'show');
+    hold(app.ComponentAxes, 'off');
+
+    % Remove the previous fitted curve, if it exists
+    if isappdata(app.FSCVAnalysisUIFigure, 'fittedCurveHandle') && isvalid(getappdata(app.FSCVAnalysisUIFigure, 'fittedCurveHandle'))
+        delete(getappdata(app.FSCVAnalysisUIFigure, 'fittedCurveHandle'));
+    end
+
+    xlim(app.DataPlot, [min(time_fit), max(time_fit)]);
+    ylim(app.DataPlot, [min(data_fit), max(data_fit)]);
+
+    % Plot the new fitted curve
+    fittedCurveHandle = plot(app.DataPlot, time_fit, data_fit, 'r-', 'DisplayName', 'Restricted Diffusion Fit');
+    setappdata(app.FSCVAnalysisUIFigure, 'fittedCurveHandle', fittedCurveHandle);
+
+    % Store fit type
+    app.fitType = 'restricted';
+
+
+    % Set axis limits
+    ylim(app.DataPlot, [min([fitCurrent; data_fit]), max([fitCurrent; data_fit])]);
+
+    % Calculate R-squared
+    SSres = sum((fitCurrent - data_fit).^2);
+    SStot = sum((fitCurrent - mean(fitCurrent)).^2);
+    Rsq = 1 - SSres / SStot;
+
+
+% Display R-squared warning and ask for refit
+    if Rsq < 0.950
+        message = sprintf('R^2 = %.4f. You may want to adjust some parameters to achieve a better fit. Refit?', Rsq);
+        selection = uiconfirm(app.FSCVAnalysisUIFigure, message, 'Low R-squared', 'Icon', 'warning', 'Options', {'Yes', 'No'}, 'DefaultOption', 'No');
+
+        if strcmp(selection, 'Yes')
+            % Clear fit and parameters
+            app.ParameterTable.Data = {
+                'r', NaN, NaN;
+                'ke', NaN, NaN;
+                'r/ke', NaN, NaN;
+                'ku1', NaN, NaN;
+                'ku2', NaN, NaN;
+                'kads', NaN, NaN;
+                'kdes', NaN, NaN;
+                'R^2', NaN, NaN
+            };
+            delete(getappdata(app.FSCVAnalysisUIFigure, 'fittedCurveHandle')); % Remove fitted curve
+            delete(app.ComponentAxes.Children); % Delete existing children of ComponentAxes
+            app.fitType = ''; % Reset fit type
+        end
+    end
+
+    % Calculate residuals and plot
+    residuals = fitCurrent - data_fit;
+    figure;
+    plot(time_fit, residuals, 'k-', 'DisplayName', 'Residuals');
+    xlabel('Time (s)');
+    ylabel('Residuals');
+    title('Residuals');
+    legend('show');
+
+    % Create table data array
+    tableData = {
+        'r', r, NaN;
+        'ke', ke, NaN;
+        'r/ke', r/ke, NaN;
+        'ku1', ku1, NaN;
+        'ku2', ku2, NaN;
+        'kads', kads, NaN;
+        'kdes', kdes, NaN;
+        'R^2', Rsq, NaN
+    };
+
+    % Populate the "Initial Parameters" column in the table
+   % if isprop(app, 'initialR') % Check if properties exist
+        tableData{1, 3} = app.initialR;
+        tableData{2, 3} = app.initialKE;
+        tableData{3, 3} = app.initialR / app.initialKE; % Calculate r/ke for initial parameters
+        tableData{4, 3} = app.initialKU;
+        tableData{5, 3} = app.initialKU2;
+        tableData{6, 3} = app.initialKADS;
+        tableData{7, 3} = app.initialKDES;
+    %end
+
+    % Assign table data
+    app.ParameterTable.Data = tableData;
+
+   
+    
+
+      
+
+
+        end
+
+        % Button pushed function: ClearAllDataButton
+        function ClearAllDataButtonPushed(app, event)
+             % Clear DataPlot axes
+             cla(app.DataPlot, 'reset');
+
+             % Clear ComponentAxes axes
+             cla(app.ComponentAxes, 'reset');
+
+             % Clear app properties
+             app.time_fit = [];
+             app.fitCurrent = [];
+             if isappdata(app.FSCVAnalysisUIFigure, 'fittedCurveHandle') && isvalid(getappdata(app.FSCVAnalysisUIFigure, 'fittedCurveHandle'))
+            delete(getappdata(app.FSCVAnalysisUIFigure, 'fittedCurveHandle'));
+            rmappdata(app.FSCVAnalysisUIFigure, 'fittedCurveHandle'); % Remove appdata
+            end
+           app.uniqueTime = [];
+           app.averageCurrent = [];
+           app.ParameterTable.Data = {};
+        end
+
+        % Button pushed function: ClearFitandParametersButton
+        function ClearFitandParametersButtonPushed(app, event)
+            % Remove fitted curve
+        if isappdata(app.FSCVAnalysisUIFigure, 'fittedCurveHandle') && isvalid(getappdata(app.FSCVAnalysisUIFigure, 'fittedCurveHandle'))
+        delete(getappdata(app.FSCVAnalysisUIFigure, 'fittedCurveHandle'));
+        rmappdata(app.FSCVAnalysisUIFigure, 'fittedCurveHandle'); % Remove appdata
+    end
+
+    % Remove fitted curve (Simple Rise and Decay)
+    if ~isempty(app.SimpleFitCurveHandle) && isvalid(app.SimpleFitCurveHandle) % Use SimpleFitCurveHandle
+        delete(app.SimpleFitCurveHandle);
+        app.SimpleFitCurveHandle = []; % Clear the property
+    end
+    
+    % Clear ParameterTable
+    app.ParameterTable.Data = {};
+
+    % Reset DataPlot axis limits
+    if ~isempty(app.uniqueTime) && ~isempty(app.averageCurrent)
+        xlim(app.DataPlot, [min(app.uniqueTime), max(app.uniqueTime)]);
+        ylim(app.DataPlot, [min(app.averageCurrent), max(app.averageCurrent)]);
+    end
+
+    % Clear ComponentAxes axes
+    cla(app.ComponentAxes, 'reset');
+
+        end
+
+        % Button pushed function: UpdatePreviewButton
+        function UpdatePreviewButtonPushed(app, event)
+
+  % Retrieve parameters directly
+    r = app.rEditField.Value;
+    ke = app.keEditField.Value;
+    ku = app.kuEditField.Value;
+    ku2 = app.ku2EditField.Value;
+    kads = app.kadsEditField.Value;
+    kdes = app.kdesEditField.Value;
+
+    % Check for NaN values
+    if isnan(ke) || isnan(r) || isnan(ku) || isnan(ku2) || isnan(kads) || isnan(kdes)
+        uialert(app.FSCVAnalysisUIFigure, 'Please enter valid numerical values for all parameters.', 'Error');
+        return; % Exit the function if any parameter is NaN
+    end
+
+    % Retrieve time range
+    startTime = app.CursorFitStart.Value;
+    endTime = app.CursorFitEnd.Value;
+    
+
+    % Access uniqueTime and averageCurrent from app properties
+    uniqueTime = app.uniqueTime;
+    averageCurrent = app.averageCurrent;
+
+    % Find the index of the startTime in uniqueTime
+    startIndex = find(uniqueTime >= startTime, 1, 'first');
+    
+    
+    % Generate previewTime starting from the found index
+    previewTime = uniqueTime(startIndex):0.02:endTime;
+    
+    % Ensure previewTime(1) matches CursorFitStart.Value
+    previewTime(1) = startTime;
+    
+     % Check if previewAxes exists
+    if isgraphics(app.previewAxes, 'axes')
+        % Check if previewAxes has children
+        if ~isempty(app.previewAxes.Children)
+            % Clear existing plot data
+            delete(app.previewAxes.Children(1)); % Assuming the model fit is the first child
+        end
+        % Bring the figure to the front
+        figure(app.previewAxes.Parent);
+    else
+        % Create new figure and axes if they don't exist
+        previewFigure = figure;
+        app.previewAxes = axes(previewFigure);
+    end
+    
+    % Plot the dataset (using UniqueTime no offset)
+    plot(app.previewAxes, uniqueTime, averageCurrent, 'o');
+    
+    
+    % Plot the RD model fit
+    hold(app.previewAxes, 'on');
+    previewCurrent = RDModel(app, previewTime, r, ke, ku, ku2, kads, kdes, app.previewAxes); % Pass previewAxes
+    plot(app.previewAxes, previewTime, previewCurrent, 'r-');
+    hold(app.previewAxes, 'off');
+
+    title(app.previewAxes, 'Preview of RD Model Fit');
+    xlabel(app.previewAxes, 'Time (s)');
+    ylabel(app.previewAxes, 'Current (nA)');
+    
+
+        end
+
+        % Callback function
+        function FSCVAnalysisUIFigureSizeChanged(app, event)
+            position = app.FSCVAnalysisUIFigure.Position;
+            
+        end
+
+        % Callback function
+        function FSCVAnalysisUIFigureSizeChanged2(app, event)
+            position = app.FSCVAnalysisUIFigure.Position;
+            
+        end
+
+        % Button pushed function: AcceptParametersButton
+        function AcceptParametersButtonPushed(app, event)
+   % Retrieve parameters from UI
+    r = app.rEditField.Value; % Replace with your actual UI component
+    ke = app.keEditField.Value; % Replace with your actual UI component
+    ku = app.kuEditField.Value; % Replace with your actual UI component
+    ku2 = app.ku2EditField.Value; % Replace with your actual UI component
+    kads = app.kadsEditField.Value; % Replace with your actual UI component
+    kdes = app.kdesEditField.Value; % Replace with your actual UI component
+
+    % Store parameters as app properties
+    app.initialR = r;
+    app.initialKE = ke;
+    app.initialKU = ku;
+    app.initialKU2 = ku2;
+    app.initialKADS = kads;
+    app.initialKDES = kdes;
+
+    % Optional: Display a message to the user
+    uialert(app.FSCVAnalysisUIFigure, 'Parameters saved successfully!', 'Save Parameters', 'Icon', 'success');
+
+        end
+
+        % Button pushed function: SetDefaultDirectoryButton
+        function SetDefaultDirectoryButtonPushed(app, event)
+            % Allow the user to select a directory
+    selectedDir = uigetdir();
+    % Check if the user selected a directory
+    if ischar(selectedDir)
+        % Store the selected directory in the app property
+        app.defaultDirectory = selectedDir;
+        % Display the set directory in the text area
+        app.TextArea.Value = selectedDir; % Set the value of the text area
+        % Display the set directory in an alert.
+        %uialert(app.FSCVAnalysisUIFigure, sprintf('Default directory set to: %s', selectedDir), 'Directory Setting', 'Icon', 'info');
+        %disp(['Default directory set to: ', selectedDir]);
+    else
+        % User canceled the selection
+        disp('Default directory selection canceled.');
+    end
+        end
+
+        % Button pushed function: SaveIvsTAverageButton
+        function SaveIvsTAverageButtonPushed(app, event)
+            % Check if average data exists
+    if isempty(app.uniqueTime) || isempty(app.averageCurrent)
+        uialert(app.FSCVAnalysisUIFigure, 'No averaged I vs T data available. Please open and average files first.', 'Save Average Data', 'Icon', 'warning');
+        return;
+    end
+
+    % Allow the user to choose a file and location to save
+    if isprop(app, 'defaultDirectory') && ischar(app.defaultDirectory)
+        [file, path] = uiputfile('*.txt', 'Save Averaged I vs T', app.defaultDirectory);
+    else
+        [file, path] = uiputfile('*.txt', 'Save Averaged I vs T');
+    end
+
+    % Check if the user selected a file
+    if ischar(file)
+        fullFileName = fullfile(path, file);
+        fileID = fopen(fullFileName, 'w');
+        if fileID ~= -1
+            % Write header (optional)
+            fprintf(fileID, 'Time (s)\tCurrent (nA)\n');
+
+            % Write the time and current data
+            for i = 1:length(app.uniqueTime)
+                fprintf(fileID, '%f\t%f\n', app.uniqueTime(i), app.averageCurrent(i));
+            end
+
+            fclose(fileID);
+            uialert(app.FSCVAnalysisUIFigure, 'Averaged I vs T data saved successfully!', 'Save Average Data', 'Icon', 'success');
+        else
+            uialert(app.FSCVAnalysisUIFigure, 'Error: Could not open file for writing.', 'Save Average Data', 'Icon', 'error');
+        end
+    else
+        uialert(app.FSCVAnalysisUIFigure, 'Save operation canceled.', 'Save Average Data');
+    end
+        end
+
+        % Button pushed function: SignalanalysisButton
+        function SignalanalysisButtonPushed(app, event)
+            % Get data and cursor values
+    uniqueTime = app.uniqueTime;
+    averageCurrent = app.averageCurrent;
+    startTime = app.CursorFitStart.Value;
+    endTime = app.CursorFitEnd.Value;
+
+    % Extract data within the selected range
+    timeRange = uniqueTime >= startTime & uniqueTime <= endTime;
+    analysisTime = uniqueTime(timeRange);
+    analysisCurrent = averageCurrent(timeRange);
+
+    if isempty(analysisTime) || isempty(analysisCurrent)
+        uialert(app.FSCVAnalysisUIFigure, 'No data selected for analysis. Adjust cursors.', 'Analysis Error', 'Icon', 'warning');
+        return;
+    end
+
+    % 1. Peak Amplitude
+    [peakAmplitude, peakIndex] = max(analysisCurrent);
+    timeAtPeak = analysisTime(peakIndex);
+
+    % 2. Area Under the Curve (AUC) - Using Trapezoidal Rule
+    auc = trapz(analysisTime, analysisCurrent);
+
+    % 3. Time to Decay by 80% from Peak
+    decay80Current = peakAmplitude * 0.20; % 20% of peak
+    timeAt80Decay = NaN;
+    afterPeakIndices = find(analysisTime >= timeAtPeak);
+    if ~isempty(afterPeakIndices)
+        firstBelow80Index = find(analysisCurrent(afterPeakIndices) <= decay80Current, 1, 'first');
+        if ~isempty(firstBelow80Index)
+            timeAt80Decay = analysisTime(afterPeakIndices(firstBelow80Index));
+            timeTo80Decay = timeAt80Decay - timeAtPeak;
+        else
+            timeTo80Decay = NaN; % Did not decay to 20% within the window
+        end
+    else
+        timeTo80Decay = NaN; % Peak is at the end of the window
+    end
+
+   % 4. Clearance Rate (nA/s) - Linear slope between 20% and 60% of peak
+    decay60Current = peakAmplitude * 0.60;
+    decay20Current = peakAmplitude * 0.20;
+
+    timeAt60Decay = NaN;
+    timeAt20Decay = NaN;
+
+    afterPeakIndices = find(analysisTime >= timeAtPeak);
+    if ~isempty(afterPeakIndices)
+        firstBelow60Index = find(analysisCurrent(afterPeakIndices) <= decay60Current, 1, 'first');
+        lastAbove20Index = find(analysisCurrent(afterPeakIndices) >= decay20Current, 1, 'last');
+
+        if ~isempty(firstBelow60Index)
+            timeAt60Decay = analysisTime(afterPeakIndices(firstBelow60Index));
+            %disp(['timeAt60Decay: ', num2str(timeAt60Decay)]); % Debugging
+        end
+        if ~isempty(lastAbove20Index)
+            timeAt20Decay = analysisTime(afterPeakIndices(lastAbove20Index));
+            %disp(['timeAt20Decay: ', num2str(timeAt20Decay)]); % Debugging
+        end
+
+        if ~isnan(timeAt60Decay) && ~isnan(timeAt20Decay) && timeAt60Decay < timeAt20Decay
+            % Calculate slope (negative for clearance)
+            clearanceRate = (decay20Current - decay60Current) / (timeAt20Decay - timeAt60Decay);
+        else
+            clearanceRate = NaN; % Could not find suitable points for slope calculation
+        end
+    else
+        clearanceRate = NaN; % Peak is at the end
+    end
+
+    
+    % 5. Rise Time (from initial cursor to peak)
+    riseTime = timeAtPeak - startTime;
+
+    % 6. Rate of Rise (positive slope from 10% to 50% of peak)
+    rise10Current = peakAmplitude * 0.10;
+    rise50Current = peakAmplitude * 0.50;
+
+    timeAt10Rise = NaN;
+    timeAt50Rise = NaN;
+
+    beforePeakIndices = find(analysisTime <= timeAtPeak);
+    if ~isempty(beforePeakIndices)
+        firstAbove10Index = find(analysisCurrent(beforePeakIndices) >= rise10Current, 1, 'first');
+        firstAbove50Index = find(analysisCurrent(beforePeakIndices) >= rise50Current, 1, 'first');
+
+        if ~isempty(firstAbove10Index)
+            timeAt10Rise = analysisTime(beforePeakIndices(firstAbove10Index));
+        end
+        if ~isempty(firstAbove50Index)
+            timeAt50Rise = analysisTime(beforePeakIndices(firstAbove50Index));
+        end
+
+        if ~isnan(timeAt10Rise) && ~isnan(timeAt50Rise) && timeAt10Rise < timeAt50Rise
+            rateOfRise = (rise50Current - rise10Current) / (timeAt50Rise - timeAt10Rise);
+        else
+            rateOfRise = NaN; % Could not find suitable points for rate of rise
+        end
+    else
+        rateOfRise = NaN; % Peak is at the start
+    end
+    
+    % --- Create Table Data ---
+    analysisResults = {
+        'Peak Amplitude (nA)', peakAmplitude;
+        'Peak time (s)', timeAtPeak;
+        'AUC (nA*s)', auc;
+        'Rise Time (s)', riseTime;
+        'Rate of Rise (nA/s)', rateOfRise;
+        'Time to 80% Decay (s)', timeTo80Decay;
+        'Clearance Rate T20-T60% (nA/s)', clearanceRate
+    };
+
+    % --- Display in a New Table on the UI ---
+    % 1. Check if the AnalysisResultsTable property exists AND holds a valid object
+    if ~isprop(app, 'AnalysisResultsTable') || ~isa(app.AnalysisResultsTable, 'matlab.ui.container.Table') || ~isvalid(app.AnalysisResultsTable)
+        % Create a new UI Figure for the table
+        analysisFigure = uifigure('Name', 'Analysis Results');
+        app.AnalysisResultsTable = uitable(analysisFigure, ...
+            'Data', analysisResults, ...
+            'ColumnName', {'Parameter', 'Value'}, ...
+            'ColumnWidth', 'auto');
+    else
+        % Update the data of the existing table
+        app.AnalysisResultsTable.Data = analysisResults;
+    end
+
+    % --- Provide a Button to Save the Table ---
+    if ~isprop(app, 'SaveAnalysisTableButton') || ~isa(app.SaveAnalysisTableButton, 'matlab.ui.control.Button') || ~isvalid(app.SaveAnalysisTableButton)
+        saveButton = uibutton(app.AnalysisResultsTable.Parent, ...
+            'Position', [20 20 150 22], ... % Adjust position as needed
+            'Text', 'Save Analysis Results', ...
+            'ButtonPushedFcn', @(btn, event) SaveAnalysisResultsButtonPushed(app, analysisResults));
+        app.SaveAnalysisTableButton = saveButton;
+    else
+        % If the button exists, you might want to update its callback if needed
+        app.SaveAnalysisTableButton.ButtonPushedFcn = @(btn, event) SaveAnalysisResultsButtonPushed(app, analysisResults);
+    end
+        end
+% Callback function to save the analysis results table
+function SaveAnalysisResultsButtonPushed(app, analysisResults)
+    if isempty(analysisResults)
+        uialert(app.FSCVAnalysisUIFigure, 'No analysis results to save.', 'Save Analysis', 'Icon', 'warning');
+        return;
+    end
+
+    % Prepare data for saving
+    header = {'Parameter', 'Value'};
+    saveData = [header; analysisResults];
+
+    % Allow user to choose file and location
+    if isprop(app, 'defaultDirectory') && ischar(app.defaultDirectory)
+        [file, path] = uiputfile('*.txt', 'Save Analysis Results', app.defaultDirectory);
+    else
+        [file, path] = uiputfile('*.txt', 'Save Analysis Results');
+    end
+
+    if ischar(file)
+        fullFileName = fullfile(path, file);
+        fileID = fopen(fullFileName, 'w');
+        if fileID ~= -1
+            for i = 1:size(saveData, 1)
+                fprintf(fileID, '%s\t%s\n', saveData{i, 1}, num2str(saveData{i, 2}));
+            end
+            fclose(fileID);
+            uialert(app.FSCVAnalysisUIFigure, 'Analysis results saved successfully!', 'Save Analysis', 'Icon', 'success');
+        else
+            uialert(app.FSCVAnalysisUIFigure, 'Error: Could not open file for writing.', 'Save Analysis', 'Icon', 'error');
+        end
+    else
+        uialert(app.FSCVAnalysisUIFigure, 'Save operation canceled.', 'Save Analysis');
+    end
+        end
+    end
+
+    % Component initialization
+    methods (Access = private)
+
+        % Create UIFigure and components
+        function createComponents(app)
+
+            % Create FSCVAnalysisUIFigure and hide until all components are created
+            app.FSCVAnalysisUIFigure = uifigure('Visible', 'off');
+            app.FSCVAnalysisUIFigure.Position = [100 100 1184 764];
+            app.FSCVAnalysisUIFigure.Name = 'FSCV Analysis';
+
+            % Create DataPlot
+            app.DataPlot = uiaxes(app.FSCVAnalysisUIFigure);
+            title(app.DataPlot, 'Data and Fit ')
+            xlabel(app.DataPlot, 'Time (s)')
+            ylabel(app.DataPlot, 'Current (nA) ')
+            zlabel(app.DataPlot, 'Z')
+            app.DataPlot.Position = [372 205 776 544];
+
+            % Create ComponentAxes
+            app.ComponentAxes = uiaxes(app.FSCVAnalysisUIFigure);
+            title(app.ComponentAxes, 'Restricted Diffusion Components')
+            xlabel(app.ComponentAxes, 'Time (s)')
+            ylabel(app.ComponentAxes, 'Current ')
+            zlabel(app.ComponentAxes, 'Z')
+            app.ComponentAxes.Box = 'on';
+            app.ComponentAxes.Position = [807 530 303 193];
+
+            % Create RDModelParametersPanel
+            app.RDModelParametersPanel = uipanel(app.FSCVAnalysisUIFigure);
+            app.RDModelParametersPanel.Tooltip = {''};
+            app.RDModelParametersPanel.TitlePosition = 'centertop';
+            app.RDModelParametersPanel.Title = 'RD Model Parameters';
+            app.RDModelParametersPanel.BackgroundColor = [0.302 0.7451 0.9333];
+            app.RDModelParametersPanel.FontWeight = 'bold';
+            app.RDModelParametersPanel.Position = [6 414 359 151];
+
+            % Create rEditField
+            app.rEditField = uieditfield(app.RDModelParametersPanel, 'numeric');
+            app.rEditField.Position = [42 93 70 22];
+            app.rEditField.Value = 300;
+
+            % Create keEditField
+            app.keEditField = uieditfield(app.RDModelParametersPanel, 'numeric');
+            app.keEditField.Position = [45 55 70 22];
+            app.keEditField.Value = 10;
+
+            % Create kuEditField
+            app.kuEditField = uieditfield(app.RDModelParametersPanel, 'numeric');
+            app.kuEditField.Position = [154 93 70 22];
+            app.kuEditField.Value = 2;
+
+            % Create ku2EditField
+            app.ku2EditField = uieditfield(app.RDModelParametersPanel, 'numeric');
+            app.ku2EditField.Position = [155 55 70 22];
+            app.ku2EditField.Value = 0.1;
+
+            % Create kadsEditField
+            app.kadsEditField = uieditfield(app.RDModelParametersPanel, 'numeric');
+            app.kadsEditField.Position = [286 93 70 22];
+            app.kadsEditField.Value = 0.2;
+
+            % Create UpdatePreviewButton
+            app.UpdatePreviewButton = uibutton(app.RDModelParametersPanel, 'push');
+            app.UpdatePreviewButton.ButtonPushedFcn = createCallbackFcn(app, @UpdatePreviewButtonPushed, true);
+            app.UpdatePreviewButton.Position = [45 11 100 23];
+            app.UpdatePreviewButton.Text = 'Update Preview';
+
+            % Create kdesEditField
+            app.kdesEditField = uieditfield(app.RDModelParametersPanel, 'numeric');
+            app.kdesEditField.Position = [286 55 70 22];
+            app.kdesEditField.Value = 0.05;
+
+            % Create AcceptParametersButton
+            app.AcceptParametersButton = uibutton(app.RDModelParametersPanel, 'push');
+            app.AcceptParametersButton.ButtonPushedFcn = createCallbackFcn(app, @AcceptParametersButtonPushed, true);
+            app.AcceptParametersButton.Position = [212 11 117 23];
+            app.AcceptParametersButton.Text = 'Accept Parameters';
+
+            % Create rEditFieldLabel
+            app.rEditFieldLabel = uilabel(app.RDModelParametersPanel);
+            app.rEditFieldLabel.HorizontalAlignment = 'right';
+            app.rEditFieldLabel.FontWeight = 'bold';
+            app.rEditFieldLabel.Position = [2 93 25 22];
+            app.rEditFieldLabel.Text = 'r';
+
+            % Create keEditFieldLabel
+            app.keEditFieldLabel = uilabel(app.RDModelParametersPanel);
+            app.keEditFieldLabel.HorizontalAlignment = 'right';
+            app.keEditFieldLabel.FontWeight = 'bold';
+            app.keEditFieldLabel.Position = [5 55 25 22];
+            app.keEditFieldLabel.Text = 'ke';
+
+            % Create kuEditFieldLabel
+            app.kuEditFieldLabel = uilabel(app.RDModelParametersPanel);
+            app.kuEditFieldLabel.HorizontalAlignment = 'right';
+            app.kuEditFieldLabel.FontWeight = 'bold';
+            app.kuEditFieldLabel.Position = [114 93 25 22];
+            app.kuEditFieldLabel.Text = 'ku';
+
+            % Create ku2EditFieldLabel
+            app.ku2EditFieldLabel = uilabel(app.RDModelParametersPanel);
+            app.ku2EditFieldLabel.HorizontalAlignment = 'right';
+            app.ku2EditFieldLabel.FontWeight = 'bold';
+            app.ku2EditFieldLabel.Position = [114 55 26 22];
+            app.ku2EditFieldLabel.Text = 'ku2';
+
+            % Create kadsEditFieldLabel
+            app.kadsEditFieldLabel = uilabel(app.RDModelParametersPanel);
+            app.kadsEditFieldLabel.HorizontalAlignment = 'right';
+            app.kadsEditFieldLabel.FontWeight = 'bold';
+            app.kadsEditFieldLabel.Position = [239 93 32 22];
+            app.kadsEditFieldLabel.Text = 'kads';
+
+            % Create kdesEditFieldLabel
+            app.kdesEditFieldLabel = uilabel(app.RDModelParametersPanel);
+            app.kdesEditFieldLabel.HorizontalAlignment = 'right';
+            app.kdesEditFieldLabel.FontWeight = 'bold';
+            app.kdesEditFieldLabel.Position = [239 55 32 22];
+            app.kdesEditFieldLabel.Text = 'kdes';
+
+            % Create OpenandAverageIvsTFilesButton
+            app.OpenandAverageIvsTFilesButton = uibutton(app.FSCVAnalysisUIFigure, 'push');
+            app.OpenandAverageIvsTFilesButton.ButtonPushedFcn = createCallbackFcn(app, @OpenandAverageIvsTFilesButtonPushed, true);
+            app.OpenandAverageIvsTFilesButton.BackgroundColor = [0 1 1];
+            app.OpenandAverageIvsTFilesButton.FontSize = 18;
+            app.OpenandAverageIvsTFilesButton.Position = [6 600 175 52];
+            app.OpenandAverageIvsTFilesButton.Text = {'Open and Average  '; 'I vs. T Files'};
+
+            % Create FitDatatoSimpleRiseandDecayButton
+            app.FitDatatoSimpleRiseandDecayButton = uibutton(app.FSCVAnalysisUIFigure, 'push');
+            app.FitDatatoSimpleRiseandDecayButton.ButtonPushedFcn = createCallbackFcn(app, @FitDatatoSimpleRiseandDecayButtonPushed, true);
+            app.FitDatatoSimpleRiseandDecayButton.WordWrap = 'on';
+            app.FitDatatoSimpleRiseandDecayButton.BackgroundColor = [0.651 0.651 0.651];
+            app.FitDatatoSimpleRiseandDecayButton.FontSize = 14;
+            app.FitDatatoSimpleRiseandDecayButton.Position = [8 345 175 42];
+            app.FitDatatoSimpleRiseandDecayButton.Text = 'Fit Data to Simple Rise and Decay';
+
+            % Create SaveParametersButton
+            app.SaveParametersButton = uibutton(app.FSCVAnalysisUIFigure, 'push');
+            app.SaveParametersButton.ButtonPushedFcn = createCallbackFcn(app, @SaveParametersButtonPushed, true);
+            app.SaveParametersButton.FontColor = [0 0 1];
+            app.SaveParametersButton.Position = [56 295 108 23];
+            app.SaveParametersButton.Text = 'Save Parameters';
+
+            % Create SaveDataFitButton
+            app.SaveDataFitButton = uibutton(app.FSCVAnalysisUIFigure, 'push');
+            app.SaveDataFitButton.ButtonPushedFcn = createCallbackFcn(app, @SaveDataFitButtonPushed, true);
+            app.SaveDataFitButton.FontColor = [0 0 1];
+            app.SaveDataFitButton.Position = [207 293 108 26];
+            app.SaveDataFitButton.Text = 'Save Data + Fit';
+
+            % Create ClearAllDataButton
+            app.ClearAllDataButton = uibutton(app.FSCVAnalysisUIFigure, 'push');
+            app.ClearAllDataButton.ButtonPushedFcn = createCallbackFcn(app, @ClearAllDataButtonPushed, true);
+            app.ClearAllDataButton.FontColor = [1 0 0];
+            app.ClearAllDataButton.Position = [207 254 108 28];
+            app.ClearAllDataButton.Text = 'Clear All Data';
+
+            % Create FittoRestrictedDiffusionModelButton
+            app.FittoRestrictedDiffusionModelButton = uibutton(app.FSCVAnalysisUIFigure, 'push');
+            app.FittoRestrictedDiffusionModelButton.ButtonPushedFcn = createCallbackFcn(app, @FittoRestrictedDiffusionModelButtonPushed, true);
+            app.FittoRestrictedDiffusionModelButton.WordWrap = 'on';
+            app.FittoRestrictedDiffusionModelButton.BackgroundColor = [0.651 0.651 0.651];
+            app.FittoRestrictedDiffusionModelButton.FontSize = 14;
+            app.FittoRestrictedDiffusionModelButton.Position = [191 345 174 42];
+            app.FittoRestrictedDiffusionModelButton.Text = 'Fit to Restricted Diffusion Model';
+
+            % Create StarttimesEditFieldLabel
+            app.StarttimesEditFieldLabel = uilabel(app.FSCVAnalysisUIFigure);
+            app.StarttimesEditFieldLabel.HorizontalAlignment = 'right';
+            app.StarttimesEditFieldLabel.Position = [514 136 74 22];
+            app.StarttimesEditFieldLabel.Text = 'Start time (s)';
+
+            % Create CursorFitStart
+            app.CursorFitStart = uieditfield(app.FSCVAnalysisUIFigure, 'numeric');
+            app.CursorFitStart.ValueDisplayFormat = '%.2f';
+            app.CursorFitStart.ValueChangedFcn = createCallbackFcn(app, @CursorFitStartValueChanged, true);
+            app.CursorFitStart.Tooltip = {'Select start time for fitting'};
+            app.CursorFitStart.Position = [594 136 120 22];
+
+            % Create EndtimesEditFieldLabel
+            app.EndtimesEditFieldLabel = uilabel(app.FSCVAnalysisUIFigure);
+            app.EndtimesEditFieldLabel.HorizontalAlignment = 'right';
+            app.EndtimesEditFieldLabel.Position = [807 136 70 22];
+            app.EndtimesEditFieldLabel.Text = 'End time (s)';
+
+            % Create CursorFitEnd
+            app.CursorFitEnd = uieditfield(app.FSCVAnalysisUIFigure, 'numeric');
+            app.CursorFitEnd.ValueDisplayFormat = '%.2f';
+            app.CursorFitEnd.ValueChangedFcn = createCallbackFcn(app, @CursorFitEndValueChanged, true);
+            app.CursorFitEnd.Tooltip = {'Select end time for fitting'};
+            app.CursorFitEnd.Position = [892 136 100 22];
+
+            % Create ParameterTable
+            app.ParameterTable = uitable(app.FSCVAnalysisUIFigure);
+            app.ParameterTable.BackgroundColor = [0.8 0.8 0.8;0.651 0.651 0.651];
+            app.ParameterTable.ColumnName = {'Fitted parameters'; 'Initial Parameters'};
+            app.ParameterTable.RowName = {};
+            app.ParameterTable.Position = [16 13 357 225];
+
+            % Create FitdatabetweenLabel
+            app.FitdatabetweenLabel = uilabel(app.FSCVAnalysisUIFigure);
+            app.FitdatabetweenLabel.HorizontalAlignment = 'center';
+            app.FitdatabetweenLabel.FontSize = 24;
+            app.FitdatabetweenLabel.FontColor = [0.149 0.149 0.149];
+            app.FitdatabetweenLabel.Position = [594 175 383 31];
+            app.FitdatabetweenLabel.Text = 'Fit data between:';
+
+            % Create ClearFitandParametersButton
+            app.ClearFitandParametersButton = uibutton(app.FSCVAnalysisUIFigure, 'push');
+            app.ClearFitandParametersButton.ButtonPushedFcn = createCallbackFcn(app, @ClearFitandParametersButtonPushed, true);
+            app.ClearFitandParametersButton.WordWrap = 'on';
+            app.ClearFitandParametersButton.FontColor = [1 0 0];
+            app.ClearFitandParametersButton.Position = [35 254 149 28];
+            app.ClearFitandParametersButton.Text = 'Clear Fit and Parameters';
+
+            % Create SetDefaultDirectoryButton
+            app.SetDefaultDirectoryButton = uibutton(app.FSCVAnalysisUIFigure, 'push');
+            app.SetDefaultDirectoryButton.ButtonPushedFcn = createCallbackFcn(app, @SetDefaultDirectoryButtonPushed, true);
+            app.SetDefaultDirectoryButton.FontWeight = 'bold';
+            app.SetDefaultDirectoryButton.Position = [81 727 198 22];
+            app.SetDefaultDirectoryButton.Text = 'Set Default Directory';
+
+            % Create TextArea
+            app.TextArea = uitextarea(app.FSCVAnalysisUIFigure);
+            app.TextArea.Position = [35 663 290 60];
+
+            % Create SaveIvsTAverageButton
+            app.SaveIvsTAverageButton = uibutton(app.FSCVAnalysisUIFigure, 'push');
+            app.SaveIvsTAverageButton.ButtonPushedFcn = createCallbackFcn(app, @SaveIvsTAverageButtonPushed, true);
+            app.SaveIvsTAverageButton.BackgroundColor = [0 1 1];
+            app.SaveIvsTAverageButton.FontSize = 18;
+            app.SaveIvsTAverageButton.Position = [190 600 175 52];
+            app.SaveIvsTAverageButton.Text = 'Save I vs T Average';
+
+            % Create SignalanalysisButton
+            app.SignalanalysisButton = uibutton(app.FSCVAnalysisUIFigure, 'push');
+            app.SignalanalysisButton.ButtonPushedFcn = createCallbackFcn(app, @SignalanalysisButtonPushed, true);
+            app.SignalanalysisButton.BackgroundColor = [1 1 0];
+            app.SignalanalysisButton.FontSize = 18;
+            app.SignalanalysisButton.Tooltip = {'Analysis of basic signal parameters '};
+            app.SignalanalysisButton.Position = [718 69 135 30];
+            app.SignalanalysisButton.Text = 'Signal analysis';
+
+            % Show the figure after all components are created
+            app.FSCVAnalysisUIFigure.Visible = 'on';
+        end
+    end
+
+    % App creation and deletion
+    methods (Access = public)
+
+        % Construct app
+        function app = FSCV_FIT_v6
+
+            % Create UIFigure and components
+            createComponents(app)
+
+            % Register the app with App Designer
+            registerApp(app, app.FSCVAnalysisUIFigure)
+
+            if nargout == 0
+                clear app
+            end
+        end
+
+        % Code that executes before app deletion
+        function delete(app)
+
+            % Delete UIFigure when app is deleted
+            delete(app.FSCVAnalysisUIFigure)
+        end
+    end
+end
